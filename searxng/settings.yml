@@ -1,0 +1,8 @@
+use_default_settings: true
+server:
+  limiter: false      # private instance, only the agent talks to it
+  image_proxy: false
+search:
+  formats:
+    - html
+    - json            # the agent uses the JSON API

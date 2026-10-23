@@ -1,0 +1,68 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: 24h        # keep the model in RAM; cold loads are slow on an N100
+      OLLAMA_CONTEXT_LENGTH: 8192   # default is too small for system prompt + tool schemas
+      OLLAMA_NUM_PARALLEL: 1
+
+  signal:                           # only started when COMPOSE_PROFILES=signal
+    image: bbernhard/signal-cli-rest-api:latest
+    profiles: [signal]
+    restart: unless-stopped
+    environment:
+      MODE: json-rpc                # persistent daemon + websocket receive (fast, low CPU)
+    ports:
+      - "127.0.0.1:8081:8080"       # for the one-off QR link (via ssh -L); never expose this
+    volumes:
+      - signal-cli:/home/.local/share/signal-cli
+
+  waha:                             # only started when COMPOSE_PROFILES=whatsapp
+    image: devlikeapro/waha:latest
+    profiles: [whatsapp]
+    restart: unless-stopped
+    ports:
+      - "3000:3000"                 # dashboard for QR login (LAN only - don't port-forward this)
+    environment:
+      WAHA_API_KEY: ${WAHA_API_KEY}
+      WHATSAPP_API_KEY: ${WAHA_API_KEY}   # older WAHA versions use this name
+      WAHA_DASHBOARD_USERNAME: admin
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD}
+      WHATSAPP_DEFAULT_ENGINE: NOWEB      # no headless Chromium -> far less RAM
+      WHATSAPP_HOOK_URL: http://agent:8000/webhook/waha
+      WHATSAPP_HOOK_EVENTS: message
+    volumes:
+      - waha-sessions:/app/.sessions
+
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+      SEARXNG_SECRET: ${SEARXNG_SECRET}
+    volumes:
+      - ./searxng:/etc/searxng:rw
+
+  agent:
+    build: ./app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: ${TIMEZONE:-UTC}
+    ports:
+      - "127.0.0.1:8000:8000"       # only for the one-off LinkedIn OAuth login (via ssh -L)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach your existing Home Assistant container
+    volumes:
+      - agent-data:/data
+      - ./eval-results:/app/eval-results    # model comparison reports land here on the host
+    depends_on: [ollama, searxng]
+
+volumes:
+  ollama:
+  waha-sessions:
+  signal-cli:
+  agent-data:
