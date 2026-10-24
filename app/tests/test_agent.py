@@ -84,6 +84,7 @@ async def test_step_limit():
 def test_parse_reply_strips_think_and_recovers_json_tool_call():
     r = parse_reply({"content": '<think>hmm</think>{"name": "echo", "arguments": {"text": "a"}}'}, {"echo"})
     assert r.tool_calls[0].name == "echo" and r.tool_calls[0].args == {"text": "a"}
+    assert parse_reply({"content": "Okay, the user said hi...\n</think>\n\nHello!"}, set()).content == "Hello!"
     r = parse_reply({"content": "", "tool_calls": [{"id": "1", "function": {"name": "echo", "arguments": "{bad"}}]},
                     {"echo"})
     assert r.tool_calls[0].error

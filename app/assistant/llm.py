@@ -44,7 +44,10 @@ def _parse_args(raw) -> tuple[dict, str | None]:
 
 
 def parse_reply(msg: dict, known_tools: set[str]) -> LLMReply:
-    content = THINK_RE.sub("", msg.get("content") or "").strip()
+    content = THINK_RE.sub("", msg.get("content") or "")
+    if "</think>" in content:  # thinking-only models can emit reasoning with just a closing tag
+        content = content.rsplit("</think>", 1)[1]
+    content = content.strip()
     calls = []
     for tc in msg.get("tool_calls") or []:
         fn = tc.get("function", {})
