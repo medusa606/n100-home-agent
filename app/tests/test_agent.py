@@ -160,3 +160,36 @@ async def test_eval_fakes_keep_real_schemas_and_confirm_rules():
     assert {"web_search", "ha_call_service", "linkedin_post", "system_status"} <= set(tools)
     assert tools["ha_call_service"].confirm({"domain": "lock", "service": "unlock", "entity_id": "lock.front_door"})
     assert "light.kitchen" in await tools["ha_find_entities"].func("kitchen")
+
+
+async def test_ollama_native_disables_thinking_and_converts_tool_calls():
+    import httpx, json as _json
+    from assistant.llm import LLM
+    seen = []
+
+    def handler(request):
+        body = _json.loads(request.content)
+        seen.append(body)
+        if request.url.path != "/api/chat":
+            return httpx.Response(404)
+        if body.get("think") is False and body["model"] == "llama3.2:3b":
+            return httpx.Response(400, json={"error": "model does not support thinking"})
+        return httpx.Response(200, json={
+            "message": {"role": "assistant", "content": "",
+                        "tool_calls": [{"function": {"name": "echo", "arguments": {"text": "hi"}}}]},
+            "prompt_eval_count": 900, "eval_count": 12, "prompt_eval_duration": 3e9, "eval_duration": 1.5e9})
+
+    tools = [{"type": "function", "function": {"name": "echo", "parameters": {}}}]
+    history = [{"role": "assistant", "content": "", "tool_calls": [
+        {"id": "1", "type": "function", "function": {"name": "echo", "arguments": '{"text": "a"}'}}]}]
+    llm = LLM("http://ollama:11434/v1", "x", "qwen3:4b", think=False)
+    llm.client = httpx.AsyncClient(base_url="http://ollama:11434", transport=httpx.MockTransport(handler))
+    reply = await llm.chat(history, tools)
+    assert seen[-1]["think"] is False
+    assert seen[-1]["messages"][0]["tool_calls"][0]["function"]["arguments"] == {"text": "a"}
+    assert reply.tool_calls[0].args == {"text": "hi"}
+    assert reply.usage == {"prompt_tokens": 900, "completion_tokens": 12, "prompt_s": 3.0, "generate_s": 1.5}
+
+    llm.model = "llama3.2:3b"  # model without a thinking mode -> retried without the flag
+    await llm.chat([], tools)
+    assert "think" not in seen[-1]

@@ -12,7 +12,8 @@ from .tools import build_tools
 async def main() -> None:
     s = get_settings()
     memory = Memory(s.db_path)
-    agent = Agent(LLM(s.llm_base_url, s.llm_api_key, s.llm_model, s.llm_timeout), build_tools(s, memory), memory, s)
+    llm = LLM(s.llm_base_url, s.llm_api_key, s.llm_model, s.llm_timeout, think=not s.llm_no_think)
+    agent = Agent(llm, build_tools(s, memory), memory, s)
     print(f"model={s.llm_model} tools={', '.join(agent.tools)}  (Ctrl+C to quit, /trace to see steps)")
     while True:
         text = await asyncio.to_thread(input, "\nyou> ")

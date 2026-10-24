@@ -66,8 +66,11 @@ class Agent:
         for step in range(self.s.max_steps):
             t0 = time.monotonic()
             reply = await self.llm.chat(messages, schemas)
+            u = reply.usage
+            timing = f"[prompt {u['prompt_tokens']} tok/{u['prompt_s']}s, out {u['completion_tokens']} tok/{u['generate_s']}s] " \
+                if "prompt_s" in u else ""
             self.memory.trace(run_id, chat_id, step, "llm", self.llm.model,
-                              reply.content or ", ".join(c.name for c in reply.tool_calls), _ms(t0))
+                              timing + (reply.content or ", ".join(c.name for c in reply.tool_calls)), _ms(t0))
             if not reply.tool_calls:
                 return reply.content or "(no reply)"
 

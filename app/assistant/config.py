@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     llm_base_url: str = "http://ollama:11434/v1"
     llm_api_key: str = "ollama"
     llm_model: str = "qwen3:4b"
-    llm_no_think: bool = True
+    llm_no_think: bool = True  # disables Qwen3/Gemma "thinking" (slow on CPU); set false to allow it
     llm_timeout: float = 300
     max_steps: int = 6
     history_turns: int = 6

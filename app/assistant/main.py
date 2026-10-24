@@ -23,7 +23,8 @@ log = logging.getLogger("assistant")
 
 settings = get_settings()
 memory = Memory(settings.db_path)
-agent = Agent(LLM(settings.llm_base_url, settings.llm_api_key, settings.llm_model, settings.llm_timeout),
+agent = Agent(LLM(settings.llm_base_url, settings.llm_api_key, settings.llm_model, settings.llm_timeout,
+              think=not settings.llm_no_think),
               build_tools(settings, memory), memory, settings)
 channel = make_channel(settings)
 locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)  # one run at a time per chat

@@ -137,7 +137,7 @@ async def main() -> None:
         await unload(root, model)  # so load_s is a cold start
         meta[model] = await prepare_model(root, model, args.pull)
         meta_path.write_text(json.dumps(meta, indent=2))
-        llm = LLM(settings.llm_base_url, settings.llm_api_key, model, args.timeout)
+        llm = LLM(settings.llm_base_url, settings.llm_api_key, model, args.timeout, think=not settings.llm_no_think)
         for case, rep in todo:
             result = await run_case(llm, settings, case, args.timeout)
             row = {"model": model, "case": case["id"], "category": case["category"], "rep": rep, **result}

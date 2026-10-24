@@ -64,20 +64,61 @@ def parse_reply(msg: dict, known_tools: set[str]) -> LLMReply:
     return LLMReply(content, calls)
 
 
+def to_ollama_messages(messages: list[dict]) -> list[dict]:
+    """Ollama's native API wants tool-call arguments as objects, not JSON strings."""
+    out = []
+    for m in messages:
+        if m.get("tool_calls"):
+            m = {**m, "tool_calls": [{"function": {"name": c["function"]["name"],
+                                                   "arguments": json.loads(c["function"]["arguments"])}}
+                                     for c in m["tool_calls"]]}
+        out.append(m)
+    return out
+
+
 class LLM:
-    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 300):
-        self.model = model
-        self.client = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout,
+    """Talks to Ollama's native /api/chat when the URL points at Ollama (so thinking can be switched off
+    reliably), otherwise to any OpenAI-compatible /chat/completions endpoint."""
+
+    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 300, think: bool = False):
+        self.model, self.think = model, think
+        base_url = base_url.rstrip("/")
+        self.native = ":11434" in base_url or "ollama" in base_url
+        if self.native:
+            base_url = base_url.removesuffix("/v1")
+        self.client = httpx.AsyncClient(base_url=base_url, timeout=timeout,
                                         headers={"Authorization": f"Bearer {api_key}"})
 
     async def chat(self, messages: list[dict], tools: list[dict]) -> LLMReply:
+        known = {t["function"]["name"] for t in tools}
+        if self.native:
+            return await self._chat_ollama(messages, tools, known)
         body = {"model": self.model, "messages": messages, "temperature": 0.3}
         if tools:
             body["tools"] = tools
         r = await self.client.post("/chat/completions", json=body)
         r.raise_for_status()
-        known = {t["function"]["name"] for t in tools}
         data = r.json()
         reply = parse_reply(data["choices"][0]["message"], known)
         reply.usage = data.get("usage") or {}
+        return reply
+
+    async def _chat_ollama(self, messages: list[dict], tools: list[dict], known: set[str]) -> LLMReply:
+        body = {"model": self.model, "messages": to_ollama_messages(messages), "stream": False,
+                "options": {"temperature": 0.3}, "keep_alive": "24h"}
+        if tools:
+            body["tools"] = tools
+        if self.think is not None:
+            body["think"] = self.think
+        r = await self.client.post("/api/chat", json=body)
+        if r.status_code == 400 and "thinking" in r.text:  # model has no thinking mode: drop the flag
+            self.think = None
+            return await self._chat_ollama(messages, tools, known)
+        r.raise_for_status()
+        data = r.json()
+        reply = parse_reply(data["message"], known)
+        reply.usage = {"prompt_tokens": data.get("prompt_eval_count", 0),
+                       "completion_tokens": data.get("eval_count", 0),
+                       "prompt_s": round(data.get("prompt_eval_duration", 0) / 1e9, 1),
+                       "generate_s": round(data.get("eval_duration", 0) / 1e9, 1)}
         return reply
