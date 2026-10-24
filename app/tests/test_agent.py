@@ -194,3 +194,41 @@ async def test_ollama_native_disables_thinking_and_converts_tool_calls():
     llm.model = "llama3.2:3b"  # model without a thinking mode -> retried without the flag
     await llm.chat([], tools)
     assert "think" not in seen[-1]
+
+
+async def test_digest_pipeline_summarises_skips_and_lists_events(monkeypatch):
+    from assistant import digest
+    from assistant.tools import web
+
+    async def fake_search(url, query, category="general", time_range="", limit=6):
+        if category == "news":
+            return [{"title": f"{query} story", "url": f"https://news.example/{query}", "snippet": "s"},
+                    {"title": "Football", "url": "https://news.example/football", "snippet": "s"}]
+        return [{"title": "AI Governance Meetup London", "url": "https://meetup.example/1", "snippet": "Nov 12"},
+                {"title": "Buy cheap laptops", "url": "https://spam.example", "snippet": ""}]
+
+    async def fake_fetch(url, limit=3000):
+        if "football" in url:
+            return "Arsenal won 2-0."
+        raise ValueError("paywall")  # falls back to the snippet
+
+    class ScriptedLLM:
+        model = "fake"
+
+        async def chat(self, messages, tools):
+            prompt = messages[-1]["content"]
+            if "Arsenal" in prompt:
+                text = "SKIP"
+            elif prompt.startswith("Title:"):
+                text = "Regulators acted. It matters."
+            else:
+                text = "YES" if "Meetup" in prompt else "NO"
+            return LLMReply(text)
+
+    monkeypatch.setattr(web, "search", fake_search)
+    monkeypatch.setattr(web, "fetch_text", fake_fetch)
+    s = Settings(db_path=":memory:", digest_topics="AI governance, EU AI Act", _env_file=None)
+    out = await digest.build_digest(ScriptedLLM(), s)
+    assert "1. *AI governance story*" in out and "2. *EU AI Act story*" in out
+    assert "Football" not in out
+    assert "AI Governance Meetup London" in out and "cheap laptops" not in out

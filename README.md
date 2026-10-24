@@ -157,9 +157,22 @@ Two settings control what the agent can touch:
 
 Tokens last about 60 days. When yours expires, the bot tells you and you repeat step 5.
 
-### 7. Morning digest (optional)
-Set `DIGEST_TIME=08:00` and `OWNER_CHAT_ID`. Each morning you'll get 3 news stories and 2 events. Reply with e.g.
-*"draft a post on 2"* to continue from it.
+### 7. Daily news digest (optional)
+```ini
+DIGEST_TIME=04:00          # start building (it's slow on an N100, so start early)
+DIGEST_SEND_TIME=08:00     # deliver; leave empty to send as soon as it's built
+DIGEST_TOPICS=AI governance, AI regulation, AI assurance, EU AI Act
+OWNER_CHAT_ID=<your chat id>
+```
+The digest is a **fixed pipeline**, not a free-form agent run. Code decides the steps, and the LLM only does narrow reading jobs:
+1. For each topic, search today's news, falling back to this week if it's quiet, and remove duplicate URLs.
+2. Open each article (up to 15). The LLM writes a two-sentence summary, or replies `SKIP` if the article is off-topic.
+   This stops once `DIGEST_MAX_ITEMS` summaries are written.
+3. Search for upcoming events near `LOCATION`. The LLM answers YES/NO on whether each result is a real, relevant event.
+4. Format the numbered digest and save it to the chat history, so *"draft a LinkedIn post on 2"* works afterwards.
+
+On a throttled N100 this takes roughly 10–20 minutes, so build at 04:00 and send at 08:00. Send `/digest` in chat
+to run one immediately.
 
 ### Updating
 ```bash
@@ -196,14 +209,16 @@ The Home Assistant tools only load when `HA_TOKEN` is set.
 | `yes`, `y`, `ok`, `confirm`, `go`, `do it`, `👍` | Runs the action waiting for confirmation (valid for 10 minutes) |
 | `no`, `n`, `cancel`, `stop` | Cancels the waiting action |
 | *anything else* | Normal chat. Any waiting action is discarded, so an old "yes" can never fire something stale |
-| `/help` | Lists capabilities |
+| `/help` or `/start` | Lists capabilities |
+| `/digest` | Builds and sends the news digest now (takes a while on an N100) |
 | `/reset` | Forgets this chat's history and any waiting action |
 | `/trace` | Shows every LLM call and tool call from the last request, with timings |
 
 ### Scheduled jobs
 | Job | When | What |
 |---|---|---|
-| Morning digest | Daily at `DIGEST_TIME` (in `TIMEZONE`) | Searches the day's news on your `INTERESTS` and upcoming events near `LOCATION`, then sends a numbered list to `OWNER_CHAT_ID`. Stored in history so follow-ups work |
+| Build digest | Daily at `DIGEST_TIME` (in `TIMEZONE`) | Runs the digest pipeline on `DIGEST_TOPICS` (or `INTERESTS`) and holds the result |
+| Send digest | Daily at `DIGEST_SEND_TIME` | Sends the held digest to `OWNER_CHAT_ID` and stores it in history. If `DIGEST_SEND_TIME` is empty, the digest is sent as soon as it's built |
 
 ### HTTP endpoints
 The agent listens on `127.0.0.1:8000` on the N100 only. Use `ssh -L 8000:localhost:8000 you@<n100-ip>` to reach it from another machine.
@@ -211,7 +226,7 @@ The agent listens on `127.0.0.1:8000` on the N100 only. Use `ssh -L 8000:localho
 | Method | Path | Purpose | Example |
 |---|---|---|---|
 | GET | `/health` | Status, active channel, model and loaded tools | `curl localhost:8000/health` |
-| POST | `/digest` | Sends the morning digest now (good for demos) | `curl -X POST localhost:8000/digest` |
+| POST | `/digest` | Builds and sends the digest now (good for demos) | `curl -X POST localhost:8000/digest` |
 | GET | `/linkedin/login` | Starts the LinkedIn OAuth login | open in a browser |
 | GET | `/linkedin/callback` | OAuth redirect target (LinkedIn calls this) | n/a |
 | POST | `/webhook/waha` | Incoming WhatsApp messages from WAHA (WhatsApp channel only) | n/a |
@@ -260,7 +275,10 @@ All settings live in `.env`.
 | `INTERESTS` | `AI agents, LLMs` | Topics for news searches and the digest |
 | `LOCATION` | *(empty)* | Default location for events |
 | `TIMEZONE` | `UTC` | IANA time zone, e.g. `Europe/London` |
-| `DIGEST_TIME` | *(empty = off)* | `HH:MM` for the morning digest |
+| `DIGEST_TIME` | *(empty = off)* | `HH:MM` to start building the digest |
+| `DIGEST_SEND_TIME` | *(empty = when built)* | `HH:MM` to deliver it |
+| `DIGEST_TOPICS` | *(empty = `INTERESTS`)* | Comma-separated search topics |
+| `DIGEST_MAX_ITEMS` | `6` | Maximum stories per digest |
 | **LLM** | | |
 | `LLM_BASE_URL` | `http://ollama:11434/v1` | Any OpenAI-compatible endpoint |
 | `LLM_API_KEY` | `ollama` | API key (ignored by Ollama) |
@@ -375,6 +393,7 @@ n100-home-agent/
     │   ├── llm.py              # OpenAI-compatible client, tool-call parsing + JSON fallback
     │   ├── memory.py           # SQLite: history, pending actions, traces, key/value
     │   ├── config.py           # settings from .env
+    │   ├── digest.py           # scheduled news digest pipeline
     │   ├── linkedin.py         # OAuth login + linkedin_post tool
     │   ├── cli.py              # terminal chat
     │   ├── channels/           # telegram.py · signal.py · whatsapp.py

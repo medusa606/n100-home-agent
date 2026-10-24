@@ -9,7 +9,7 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from . import linkedin
+from . import digest, linkedin
 from .agent import Agent
 from .channels import make_channel
 from .channels.whatsapp import parse_webhook
@@ -30,9 +30,6 @@ channel = make_channel(settings)
 locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)  # one run at a time per chat
 running: set[asyncio.Task] = set()
 
-DIGEST_PROMPT = ("Morning digest. 1) Use web_search with category news, time_range day, to find the 3 most relevant "
-                 "stories for my interests. 2) Use find_events for 2 upcoming events near me. Reply with a numbered "
-                 "list: one line + URL each. End with: 'Reply e.g. \"draft a post on 2\"'.")
 
 
 async def process(chat_id: str, text: str) -> None:
@@ -48,31 +45,65 @@ async def process(chat_id: str, text: str) -> None:
         await channel.send(chat_id, reply)
 
 
-async def on_message(chat_id: str, text: str) -> None:
-    if chat_id not in settings.allowed_chats:
-        log.warning("ignored message from non-allowlisted chat %s (add to ALLOWED_CHAT_IDS if it's you)", chat_id)
-        return
-    task = asyncio.create_task(process(chat_id, text))  # don't block the listener while the LLM works
+def background(coro) -> None:
+    task = asyncio.create_task(coro)  # don't block the listener while the LLM works
     running.add(task)
     task.add_done_callback(running.discard)
 
 
-async def daily_digest() -> None:
-    chat = settings.owner_chat_id
-    async with locks[chat]:
-        reply = await agent.run(chat, DIGEST_PROMPT)
-        memory.add_turn(chat, "user", "[scheduled morning digest]")
-        memory.add_turn(chat, "assistant", reply)  # so follow-ups like "draft a post on 2" work
-    await channel.send(chat, reply)
+async def on_message(chat_id: str, text: str) -> None:
+    if chat_id not in settings.allowed_chats:
+        log.warning("ignored message from non-allowlisted chat %s (add to ALLOWED_CHAT_IDS if it's you)", chat_id)
+        return
+    if text.strip().lower() == "/digest":
+        await channel.send(chat_id, "Building today's digest now - this takes a while on the N100, I'll send it when done.")
+        background(make_digest(chat_id, send_now=True))
+        return
+    background(process(chat_id, text))
+
+
+async def make_digest(chat_id: str, send_now: bool) -> None:
+    """Build the digest; send it straight away, or park it until DIGEST_SEND_TIME."""
+    log.info("building digest")
+    try:
+        text = await digest.build_digest(agent.llm, settings)
+    except Exception as e:
+        log.exception("digest failed")
+        text = f"⚠️ Digest failed: {e}"
+    log.info("digest built")
+    if send_now:
+        await deliver_digest(chat_id, text)
+    else:
+        memory.put("pending_digest", text)
+
+
+async def deliver_digest(chat_id: str, text: str | None = None) -> None:
+    text = text or memory.get("pending_digest")
+    if not text:
+        return
+    memory.put("pending_digest", "")
+    memory.add_turn(chat_id, "user", "[daily digest]")
+    memory.add_turn(chat_id, "assistant", text)  # so follow-ups like "draft a post on 2" work
+    await channel.send(chat_id, text)
+
+
+def at(hhmm: str) -> CronTrigger:
+    hh, mm = hhmm.split(":")
+    return CronTrigger(hour=int(hh), minute=int(mm))
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
-    if settings.digest_time and settings.owner_chat_id:
-        hh, mm = settings.digest_time.split(":")
-        scheduler.add_job(daily_digest, CronTrigger(hour=int(hh), minute=int(mm)))
+    owner = settings.owner_chat_id
+    if settings.digest_time and owner:
+        separate_send = bool(settings.digest_send_time)
+        scheduler.add_job(make_digest, at(settings.digest_time), args=[owner, not separate_send],
+                          misfire_grace_time=3600)
+        if separate_send:
+            scheduler.add_job(deliver_digest, at(settings.digest_send_time), args=[owner], misfire_grace_time=3600)
         scheduler.start()
+        log.info("digest: build at %s, send at %s", settings.digest_time, settings.digest_send_time or "when built")
     listener = asyncio.create_task(channel.listen(on_message))
     log.info("channel=%s model=%s tools: %s", channel.name, settings.llm_model, ", ".join(agent.tools))
     yield
@@ -111,8 +142,6 @@ async def linkedin_callback(code: str = "", state: str = "", error: str = ""):
 
 @app.post("/digest")
 async def trigger_digest():
-    """Fire the morning digest now (handy for demos): curl -X POST localhost:8000/digest"""
-    task = asyncio.create_task(daily_digest())
-    running.add(task)
-    task.add_done_callback(running.discard)
+    """Build and send the digest now (handy for demos): curl -X POST localhost:8000/digest"""
+    background(make_digest(settings.owner_chat_id, send_now=True))
     return {"ok": True}

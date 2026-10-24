@@ -14,7 +14,8 @@ log = logging.getLogger(__name__)
 YES = {"yes", "y", "confirm", "ok", "go", "do it", "👍"}
 NO = {"no", "n", "cancel", "stop"}
 HELP = ("I can: search news, find events/meetups, read links, draft & publish LinkedIn posts, "
-        "control Home Assistant, and report on the server.\nCommands: /reset (forget chat), /trace (last run's steps).")
+        "control Home Assistant, and report on the server.\n"
+        "Commands: /digest (news digest now), /reset (forget chat), /trace (last run's steps).")
 
 SYSTEM = """You are {user}'s personal assistant, running privately on their home server (Intel N100, local LLM).
 User location: {location}. Interests: {interests}. The newest user message starts with the current date and time in [brackets].
@@ -47,7 +48,7 @@ class Agent:
         if low == "/reset":
             self.memory.reset(chat_id)
             return "Memory cleared."
-        if low == "/help":
+        if low in ("/help", "/start"):
             return HELP
         if low == "/trace":
             return self._format_trace(chat_id)

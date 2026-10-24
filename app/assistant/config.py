@@ -15,7 +15,10 @@ class Settings(BaseSettings):
     interests: str = "AI agents, LLMs"
     location: str = ""
     timezone: str = "UTC"
-    digest_time: str = ""
+    digest_time: str = ""        # when to start building the digest, e.g. 04:00
+    digest_send_time: str = ""   # when to deliver it, e.g. 08:00 (empty = as soon as it's built)
+    digest_topics: str = ""      # comma-separated search topics (empty = INTERESTS)
+    digest_max_items: int = 6
 
     # LLM
     llm_base_url: str = "http://ollama:11434/v1"
