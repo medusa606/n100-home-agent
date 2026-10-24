@@ -17,7 +17,7 @@ HELP = ("I can: search news, find events/meetups, read links, draft & publish Li
         "control Home Assistant, and report on the server.\nCommands: /reset (forget chat), /trace (last run's steps).")
 
 SYSTEM = """You are {user}'s personal assistant, running privately on their home server (Intel N100, local LLM).
-Now: {now}. User location: {location}. Interests: {interests}.
+User location: {location}. Interests: {interests}. The newest user message starts with the current date and time in [brackets].
 You chat over a messaging app: keep replies short, plain text, *bold* allowed, no markdown headers or tables.
 Use tools for anything factual, current, about the home, or LinkedIn. Never invent search results, URLs or entity IDs.
 Home Assistant: call ha_find_entities to get the exact entity_id before ha_call_service.
@@ -30,9 +30,10 @@ class Agent:
         self.llm, self.tools, self.memory, self.s = llm, tools, memory, settings
 
     def system_prompt(self) -> str:
-        now = datetime.now(ZoneInfo(self.s.timezone)).strftime("%A %d %B %Y %H:%M")
+        # Kept free of anything that changes (like the time) so Ollama can cache the processed
+        # system prompt + tool schemas between messages - re-reading them is the slowest part on CPU.
         no_think = self.s.llm_no_think and "qwen3" in self.llm.model  # Qwen3's soft switch to skip <think>
-        return SYSTEM.format(user=self.s.user_name, now=now, location=self.s.location or "unknown",
+        return SYSTEM.format(user=self.s.user_name, location=self.s.location or "unknown",
                              interests=self.s.interests, no_think=" /no_think" if no_think else "")
 
     async def handle(self, chat_id: str, text: str) -> str:
@@ -60,7 +61,7 @@ class Agent:
         run_id = uuid.uuid4().hex[:8]
         messages = [{"role": "system", "content": self.system_prompt()},
                     *self.memory.history(chat_id, self.s.history_turns),
-                    {"role": "user", "content": text}]
+                    {"role": "user", "content": f"[{self._now()}] {text}"}]
         schemas = [t.schema() for t in self.tools.values()]
 
         for step in range(self.s.max_steps):
@@ -93,6 +94,9 @@ class Agent:
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": result[:4000]})
 
         return "I ran out of steps on that one - try breaking it into smaller asks."
+
+    def _now(self) -> str:
+        return datetime.now(ZoneInfo(self.s.timezone)).strftime("%A %d %B %Y %H:%M")
 
     async def _execute(self, tool: Tool, args: dict) -> str:
         try:
